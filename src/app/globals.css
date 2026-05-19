@@ -169,6 +169,10 @@
   white-space: pre-wrap;
 }
 
+.crm-grid .crm-double-click-edit-cell:hover {
+  cursor: text;
+}
+
 .crm-grid .crm-detail-cell {
   align-items: center;
   display: flex;
