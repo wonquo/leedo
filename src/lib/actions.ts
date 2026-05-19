@@ -20,7 +20,7 @@ export async function loginAction(_state: LoginState, formData: FormData) {
     return { error: "ID 또는 비밀번호가 올바르지 않습니다." };
   }
 
-  redirect("/customers");
+  redirect("/dashboard");
 }
 
 export async function logoutAction() {
