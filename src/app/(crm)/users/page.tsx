@@ -7,7 +7,6 @@ import { UserManagementTable } from "@/components/admin/user-management-table";
 
 export default async function UsersPage() {
   const currentUser = await getCurrentAppUser();
-  const users = await listUsers();
 
   if (!currentUser || !canManageUsers(currentUser.role)) {
     return (
@@ -18,6 +17,8 @@ export default async function UsersPage() {
       </Alert>
     );
   }
+
+  const users = await listUsers();
 
   return (
     <div className="space-y-4">

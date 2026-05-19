@@ -3,6 +3,7 @@ import "server-only";
 import { createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { cache } from "react";
 import { eq } from "drizzle-orm";
 import { appUsers, type AppUserRole } from "@/db/schema";
 import { getDb, hasDatabaseUrl } from "@/db";
@@ -32,7 +33,7 @@ export async function requireAppUser() {
   return user;
 }
 
-export async function getCurrentAppUser(): Promise<AppUserRow | null> {
+export const getCurrentAppUser = cache(async (): Promise<AppUserRow | null> => {
   if (!hasDatabaseUrl()) {
     return null;
   }
@@ -53,7 +54,7 @@ export async function getCurrentAppUser(): Promise<AppUserRow | null> {
   }
 
   return serializeUser(user);
-}
+});
 
 export async function verifyLogin(loginId: string, password: string) {
   if (!hasDatabaseUrl()) {
