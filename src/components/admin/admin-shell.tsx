@@ -64,7 +64,7 @@ export function AdminShell({
   const pathname = usePathname();
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [displayUser, setDisplayUser] = useState(user);
-  const sidebarWidth = isCollapsed ? "lg:pl-[84px]" : "lg:pl-[248px]";
+  const sidebarWidth = isCollapsed ? "lg:pl-[84px]" : "lg:pl-[174px]";
   const currentTitle =
     navItems.find((item) => pathname === item.href || pathname.startsWith(`${item.href}/`))?.label ??
     "LEEDO";
@@ -74,7 +74,7 @@ export function AdminShell({
       <aside
         className={cn(
           "fixed inset-y-0 left-0 hidden bg-[#223348] text-white shadow-[16px_0_44px_rgba(15,28,48,0.12)] transition-all duration-200 lg:block",
-          isCollapsed ? "w-[84px]" : "w-[248px]",
+          isCollapsed ? "w-[84px]" : "w-[174px]",
         )}
       >
         <Sidebar collapsed={isCollapsed} pathname={pathname} user={displayUser} />
@@ -91,7 +91,7 @@ export function AdminShell({
               <SheetContent
                 side="left"
                 showCloseButton={false}
-                className="w-[248px] border-0 bg-[#223348] p-0 text-white"
+                className="w-[174px] border-0 bg-[#223348] p-0 text-white"
               >
                 <Sidebar collapsed={false} pathname={pathname} user={displayUser} mobile />
               </SheetContent>

@@ -17,12 +17,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { requireAppUser } from "@/lib/auth";
 import { getDashboardStats } from "@/lib/customers";
 import { SALES_TEMPERATURE_LABEL, getSalesPotentialMeta } from "@/lib/sales-potential";
-import type { CustomerRow } from "@/lib/types";
+import { CUSTOMER_EMPTY_FACET, type CustomerRow } from "@/lib/types";
 
 type CountPair = {
   label: string;
   value: number;
 };
+
+type CustomerFilterKey = "source" | "salesPotential" | "status" | "gender" | "ageDecade";
+type CustomerHref = string | { pathname: string; query: Record<string, string> };
 
 const sourceColors = ["#2563eb", "#0891b2", "#16a34a", "#ca8a04", "#dc2626", "#7c3aed", "#64748b", "#94a3b8"];
 const distributionColors = ["#2563eb", "#0f766e", "#ca8a04", "#dc2626", "#7c3aed", "#475569", "#0891b2", "#94a3b8"];
@@ -46,6 +49,7 @@ export default async function DashboardPage() {
       icon: Users,
       accent: "#2563eb",
       background: "#eff6ff",
+      href: "/customers",
     },
     {
       title: "상담 가능",
@@ -54,6 +58,7 @@ export default async function DashboardPage() {
       icon: UserRoundCheck,
       accent: "#0f766e",
       background: "#ecfdf5",
+      href: dashboardFilterHref("open"),
     },
     {
       title: "재연락 대상",
@@ -62,6 +67,7 @@ export default async function DashboardPage() {
       icon: RefreshCw,
       accent: "#ca8a04",
       background: "#fefce8",
+      href: dashboardFilterHref("callbacks"),
     },
     {
       title: "블랙 고객",
@@ -70,6 +76,7 @@ export default async function DashboardPage() {
       icon: Ban,
       accent: "#dc2626",
       background: "#fef2f2",
+      href: customerFilterHref("status", "블랙"),
     },
     {
       title: "연락 완료율",
@@ -78,6 +85,7 @@ export default async function DashboardPage() {
       icon: CheckCircle2,
       accent: "#7c3aed",
       background: "#f5f3ff",
+      href: dashboardFilterHref("contacted"),
     },
   ];
 
@@ -123,6 +131,7 @@ export default async function DashboardPage() {
           icon={<Tags className="size-4" />}
           items={stats.byStatus}
           colors={distributionColors}
+          filterKey="status"
         />
       </div>
 
@@ -133,6 +142,7 @@ export default async function DashboardPage() {
           icon={<Flame className="size-4" />}
           items={stats.bySource}
           colors={sourceColors}
+          filterKey="source"
           horizontal
         />
         <DistributionCard gender={stats.byGender} ageDecade={stats.byAgeDecade} total={stats.total} />
@@ -164,6 +174,7 @@ function KpiCard({
   icon: Icon,
   accent,
   background,
+  href,
 }: {
   title: string;
   value: number | string;
@@ -171,6 +182,7 @@ function KpiCard({
   icon: ComponentType<{ className?: string }>;
   accent: string;
   background: string;
+  href: CustomerHref;
 }) {
   return (
     <DashboardCard className="min-h-[132px]">
@@ -182,9 +194,15 @@ function KpiCard({
               {typeof value === "number" ? value.toLocaleString() : value}
             </p>
           </div>
-          <span className="grid size-11 shrink-0 place-items-center rounded-lg" style={{ backgroundColor: background, color: accent }}>
+          <Link
+            href={href}
+            className="grid size-11 shrink-0 place-items-center rounded-lg transition-transform hover:-translate-y-px focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#2f70dc]"
+            style={{ backgroundColor: background, color: accent }}
+            aria-label={`${title} 조건으로 고객관리 조회`}
+            title={`${title} 조건으로 조회`}
+          >
             <Icon className="size-5" />
-          </span>
+          </Link>
         </div>
         <p className="truncate text-xs font-medium text-[#7a869b]">{caption}</p>
       </CardContent>
@@ -221,7 +239,12 @@ function TemperatureCard({ items, total }: { items: CountPair[]; total: number }
             const meta = getSalesPotentialMeta(item.label);
             const percent = getPercent(item.value, chartTotal);
             return (
-              <div key={item.label} className="grid gap-2">
+              <Link
+                key={item.label}
+                href={customerFilterHref("salesPotential", item.label)}
+                className="grid gap-2 rounded p-1 transition-colors hover:bg-[#f8fafc] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#2f70dc]"
+                aria-label={`${meta.value} 조건으로 고객관리 조회`}
+              >
                 <div className="flex items-center justify-between gap-3 text-sm">
                   <span className="min-w-0 truncate font-semibold text-[#22304f]">{meta.value}</span>
                   <span className="whitespace-nowrap font-mono text-xs font-bold text-[#22304f]">
@@ -231,7 +254,7 @@ function TemperatureCard({ items, total }: { items: CountPair[]; total: number }
                 <div className="h-2.5 overflow-hidden rounded-full bg-[#edf2f7]">
                   <div className="h-full rounded-full" style={{ width: `${percent}%`, backgroundColor: meta.chartColor }} />
                 </div>
-              </div>
+              </Link>
             );
           })}
         </div>
@@ -246,6 +269,7 @@ function BarChartCard({
   icon,
   items,
   colors,
+  filterKey,
   horizontal = false,
 }: {
   title: string;
@@ -253,6 +277,7 @@ function BarChartCard({
   icon: ReactNode;
   items: CountPair[];
   colors: string[];
+  filterKey: CustomerFilterKey;
   horizontal?: boolean;
 }) {
   const total = items.reduce((sum, item) => sum + item.value, 0);
@@ -275,7 +300,14 @@ function BarChartCard({
         {horizontal ? (
           <div className="space-y-4">
             {chartItems.map((item, index) => (
-              <ProgressRow key={`${item.label}-${index}`} item={item} max={max} total={total} color={colors[index % colors.length]} />
+              <ProgressRow
+                key={`${item.label}-${index}`}
+                item={item}
+                max={max}
+                total={total}
+                color={colors[index % colors.length]}
+                href={customerFilterHref(filterKey, item.label)}
+              />
             ))}
           </div>
         ) : (
@@ -283,7 +315,12 @@ function BarChartCard({
             {chartItems.map((item, index) => {
               const height = item.value > 0 ? Math.max(8, (item.value / max) * 100) : 2;
               return (
-                <div key={`${item.label}-${index}`} className="flex min-w-0 flex-col items-center gap-2">
+                <Link
+                  key={`${item.label}-${index}`}
+                  href={customerFilterHref(filterKey, item.label)}
+                  className="flex min-w-0 flex-col items-center gap-2 rounded p-1 transition-colors hover:bg-[#f8fafc] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#2f70dc]"
+                  aria-label={`${item.label} 조건으로 고객관리 조회`}
+                >
                   <span className="font-mono text-xs font-semibold text-[#22304f]">{item.value.toLocaleString()}</span>
                   <div className="flex h-32 w-full max-w-12 items-end rounded-md bg-[#f1f5f9]">
                     <div
@@ -294,7 +331,7 @@ function BarChartCard({
                   <span className="w-full truncate text-center text-xs font-medium text-[#66748a]" title={item.label}>
                     {item.label}
                   </span>
-                </div>
+                </Link>
               );
             })}
           </div>
@@ -309,17 +346,23 @@ function ProgressRow({
   max,
   total,
   color,
+  href,
 }: {
   item: CountPair;
   max: number;
   total: number;
   color: string;
+  href: CustomerHref;
 }) {
   const width = item.value > 0 ? Math.max(3, (item.value / max) * 100) : 0;
   const percent = getPercent(item.value, total);
 
   return (
-    <div className="grid gap-2">
+    <Link
+      href={href}
+      className="grid gap-2 rounded p-1 transition-colors hover:bg-[#f8fafc] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#2f70dc]"
+      aria-label={`${item.label} 조건으로 고객관리 조회`}
+    >
       <div className="flex items-center justify-between gap-3 text-sm">
         <span className="min-w-0 truncate font-semibold text-[#22304f]">{item.label}</span>
         <span className="whitespace-nowrap font-mono text-xs font-bold text-[#22304f]">
@@ -329,7 +372,7 @@ function ProgressRow({
       <div className="h-3 overflow-hidden rounded-full bg-[#edf2f7]">
         <div className="h-full rounded-full" style={{ width: `${width}%`, backgroundColor: color }} />
       </div>
-    </div>
+    </Link>
   );
 }
 
@@ -349,14 +392,24 @@ function DistributionCard({
         <p className="mt-2 text-xs text-[#66748a]">성별과 연령대 기준</p>
       </CardHeader>
       <CardContent className="grid gap-6">
-        <MiniDistribution title="성별" items={gender} total={total} />
-        <MiniDistribution title="연령대" items={ageDecade} total={total} />
+        <MiniDistribution title="성별" items={gender} total={total} filterKey="gender" />
+        <MiniDistribution title="연령대" items={ageDecade} total={total} filterKey="ageDecade" />
       </CardContent>
     </DashboardCard>
   );
 }
 
-function MiniDistribution({ title, items, total }: { title: string; items: CountPair[]; total: number }) {
+function MiniDistribution({
+  title,
+  items,
+  total,
+  filterKey,
+}: {
+  title: string;
+  items: CountPair[];
+  total: number;
+  filterKey: CustomerFilterKey;
+}) {
   const max = Math.max(...items.map((item) => item.value), 1);
   const chartItems = items.length > 0 ? items : [{ label: "미분류", value: 0 }];
 
@@ -374,6 +427,7 @@ function MiniDistribution({ title, items, total }: { title: string; items: Count
             max={max}
             total={total}
             color={distributionColors[index % distributionColors.length]}
+            href={customerFilterHref(filterKey, item.label)}
           />
         ))}
       </div>
@@ -517,4 +571,22 @@ function getPercent(value: number, total: number) {
   if (total <= 0) return 0;
 
   return Math.round((value / total) * 100);
+}
+
+function customerFilterHref(key: CustomerFilterKey, value: string): CustomerHref {
+  return {
+    pathname: "/customers",
+    query: { [key]: normalizeCustomerFilterValue(value) },
+  };
+}
+
+function dashboardFilterHref(value: "open" | "callbacks" | "contacted"): CustomerHref {
+  return {
+    pathname: "/customers",
+    query: { dashboardFilter: value },
+  };
+}
+
+function normalizeCustomerFilterValue(value: string) {
+  return value === "미분류" ? CUSTOMER_EMPTY_FACET : value;
 }

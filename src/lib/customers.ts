@@ -2,11 +2,13 @@ import { randomUUID } from "node:crypto";
 import { and, asc, count, desc, eq, ilike, inArray, isNotNull, or, sql, type SQL } from "drizzle-orm";
 import { getDb, hasDatabaseUrl } from "@/db";
 import { appUsers, customerActivities, customerImportRows, customers, importBatches } from "@/db/schema";
+import { CUSTOMER_EMPTY_FACET } from "./types";
 import { getDemoCustomers, getDemoUsers } from "./demo-data";
 import type {
   AppUserRow,
   CustomerActivityRow,
   CustomerContactMethod,
+  CustomerDashboardFilter,
   CustomerFacets,
   CustomerPageResult,
   CustomerRow,
@@ -34,6 +36,7 @@ type CustomerListInput = {
   status?: string | null;
   gender?: string | null;
   ageDecade?: string | null;
+  dashboardFilter?: CustomerDashboardFilter | null;
   sortKey?: CustomerSortKey | null;
   sortDirection?: "asc" | "desc";
 };
@@ -900,20 +903,58 @@ function buildCustomerWhere(assignedUserId: string | undefined, input: CustomerL
     conditions.push(eq(customers.assignedUserId, assignedUserId));
   }
   if (input.source) {
-    conditions.push(eq(customers.source, input.source));
+    conditions.push(
+      isEmptyFacet(input.source)
+        ? sql`coalesce(nullif(${customers.source}, ''), '미분류') = '미분류'`
+        : eq(customers.source, input.source),
+    );
   }
   if (input.salesPotential) {
-    const aliases = getSalesPotentialAliases(input.salesPotential);
-    conditions.push(inArray(customers.salesPotential, aliases.length > 0 ? aliases : [input.salesPotential]));
+    if (isEmptyFacet(input.salesPotential)) {
+      conditions.push(sql`coalesce(nullif(${customers.salesPotential}, ''), '미분류') = '미분류'`);
+    } else {
+      const aliases = getSalesPotentialAliases(input.salesPotential);
+      conditions.push(inArray(customers.salesPotential, aliases.length > 0 ? aliases : [input.salesPotential]));
+    }
   }
   if (input.status) {
-    conditions.push(eq(customers.status, input.status));
+    conditions.push(
+      isEmptyFacet(input.status)
+        ? sql`coalesce(nullif(${customers.status}, ''), '미분류') = '미분류'`
+        : eq(customers.status, input.status),
+    );
   }
   if (input.gender) {
-    conditions.push(eq(customers.gender, input.gender));
+    conditions.push(
+      isEmptyFacet(input.gender)
+        ? sql`coalesce(nullif(${customers.gender}, ''), '미분류') = '미분류'`
+        : eq(customers.gender, input.gender),
+    );
   }
   if (input.ageDecade) {
-    conditions.push(eq(customers.ageDecade, input.ageDecade));
+    conditions.push(
+      isEmptyFacet(input.ageDecade)
+        ? sql`coalesce(nullif(${customers.ageDecade}, ''), '미분류') = '미분류'`
+        : eq(customers.ageDecade, input.ageDecade),
+    );
+  }
+  if (input.dashboardFilter === "open") {
+    const openCondition = or(sql`${customers.status} is null`, sql`${customers.status} <> '블랙'`);
+    if (openCondition) {
+      conditions.push(openCondition);
+    }
+  }
+  if (input.dashboardFilter === "callbacks") {
+    conditions.push(inArray(customers.status, ["다시 전화", "재통"]));
+  }
+  if (input.dashboardFilter === "contacted") {
+    const contactedCondition = or(
+      isNotNull(customers.lastContactedAt),
+      and(isNotNull(customers.lastContactedLabel), sql`${customers.lastContactedLabel} <> ''`),
+    );
+    if (contactedCondition) {
+      conditions.push(contactedCondition);
+    }
   }
   if (query) {
     const pattern = `%${query}%`;
@@ -986,16 +1027,19 @@ function normalizePageSize(pageSize: number | "all" | undefined) {
 function filterAndSortDemoCustomers(rows: CustomerRow[], input: CustomerListInput) {
   const query = input.query?.trim().toLowerCase();
   const filtered = rows.filter((row) => {
-    if (input.source && row.source !== input.source) return false;
+    if (input.source && !matchesFacetValue(row.source, input.source)) return false;
     if (
       input.salesPotential &&
-      normalizeSalesPotential(row.salesPotential) !== normalizeSalesPotential(input.salesPotential)
+      !matchesFacetValue(normalizeSalesPotential(row.salesPotential), input.salesPotential)
     ) {
       return false;
     }
-    if (input.status && row.status !== input.status) return false;
-    if (input.gender && row.gender !== input.gender) return false;
-    if (input.ageDecade && row.ageDecade !== input.ageDecade) return false;
+    if (input.status && !matchesFacetValue(row.status, input.status)) return false;
+    if (input.gender && !matchesFacetValue(row.gender, input.gender)) return false;
+    if (input.ageDecade && !matchesFacetValue(row.ageDecade, input.ageDecade)) return false;
+    if (input.dashboardFilter === "open" && row.status === "블랙") return false;
+    if (input.dashboardFilter === "callbacks" && row.status !== "다시 전화" && row.status !== "재통") return false;
+    if (input.dashboardFilter === "contacted" && !row.lastContactedAt && !row.lastContactedLabel) return false;
     if (!query) return true;
 
     return [
@@ -1067,6 +1111,18 @@ function isPresentString(value: string | null): value is string {
 function normalizeOptionalText(value: string | null | undefined) {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
+}
+
+function isEmptyFacet(value: string) {
+  return value === CUSTOMER_EMPTY_FACET || value === "미분류";
+}
+
+function matchesFacetValue(rowValue: string | null, filterValue: string) {
+  if (isEmptyFacet(filterValue)) {
+    return !rowValue || rowValue === "미분류";
+  }
+
+  return rowValue === filterValue;
 }
 
 function getLatestOccurredAt(activities: Array<{ occurredAt: string | Date }>) {

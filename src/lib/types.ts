@@ -1,5 +1,9 @@
 import type { AppUserRole, AppUserStatus, CustomerOptionType } from "@/db/schema";
 
+export const CUSTOMER_EMPTY_FACET = "__empty__";
+
+export type CustomerDashboardFilter = "open" | "callbacks" | "contacted";
+
 export type AppUserRow = {
   id: string;
   loginId: string;

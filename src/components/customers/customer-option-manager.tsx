@@ -46,18 +46,14 @@ export function CustomerOptionManager({
     onOptionsChange?.(options);
   }, [onOptionsChange, options]);
 
-  function upsertOption(next: CustomerOptionRow, usageCount?: number) {
+  function upsertOption(next: CustomerOptionRow) {
     setOptions((current) => {
-      const found = current.find((option) => option.id === next.id);
-      if (!found) return [...current, next].sort(sortOptions);
+      const withoutDuplicates = current.filter(
+        (option) =>
+          option.id !== next.id && !(option.type === next.type && option.label === next.label),
+      );
 
-      return current
-        .map((option) =>
-          option.id === next.id
-            ? { ...option, ...next, usageCount: usageCount ?? option.usageCount }
-            : option,
-        )
-        .sort(sortOptions);
+      return [...withoutDuplicates, next].sort(sortOptions);
     });
   }
 
@@ -108,7 +104,7 @@ function OptionSection({
   isPending: boolean;
   onError: (message: string | null) => void;
   onStartTransition: ReturnType<typeof useTransition>[1];
-  onUpsert: (option: CustomerOptionRow, usageCount?: number) => void;
+  onUpsert: (option: CustomerOptionRow) => void;
   onRemove: (id: string) => void;
 }) {
   const [newLabel, setNewLabel] = useState("");
@@ -153,7 +149,35 @@ function OptionSection({
         return;
       }
 
-      onUpsert(result.option, option.usageCount);
+      onUpsert(result.option);
+      setEditingId(null);
+    });
+  }
+
+  function renameUnmanagedOption(option: CustomerOptionRow, label: string) {
+    const trimmed = label.trim();
+    if (!trimmed) return;
+
+    onStartTransition(async () => {
+      onError(null);
+      const response = await fetch("/api/customer-options", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: option.type,
+          fromLabel: option.label,
+          label: trimmed,
+        }),
+      });
+      const result = await response.json();
+
+      if (!response.ok) {
+        onError(result.error ?? "수정에 실패했습니다.");
+        return;
+      }
+
+      onRemove(option.id);
+      onUpsert(result.option);
       setEditingId(null);
     });
   }
@@ -252,24 +276,21 @@ function OptionSection({
                   </TableCell>
                   <TableCell>
                     <div className="flex justify-end gap-1">
-                      {!option.isManaged ? (
-                        <Button
-                          size="icon-sm"
-                          variant="outline"
-                          disabled={isPending}
-                          aria-label="옵션 등록"
-                          onClick={() => createOption(option.label)}
-                        >
-                          <Check className="size-4" />
-                        </Button>
-                      ) : editing ? (
+                      {editing ? (
                         <>
                           <Button
                             size="icon-sm"
                             variant="outline"
                             disabled={isPending || !draftLabel.trim()}
                             aria-label="저장"
-                            onClick={() => updateOption(option, { label: draftLabel })}
+                            onClick={() => {
+                              if (option.isManaged) {
+                                updateOption(option, { label: draftLabel });
+                                return;
+                              }
+
+                              renameUnmanagedOption(option, draftLabel);
+                            }}
                           >
                             <Save className="size-4" />
                           </Button>
@@ -280,6 +301,30 @@ function OptionSection({
                             onClick={() => setEditingId(null)}
                           >
                             <X className="size-4" />
+                          </Button>
+                        </>
+                      ) : !option.isManaged ? (
+                        <>
+                          <Button
+                            size="icon-sm"
+                            variant="outline"
+                            disabled={isPending}
+                            aria-label="옵션 등록"
+                            onClick={() => createOption(option.label)}
+                          >
+                            <Check className="size-4" />
+                          </Button>
+                          <Button
+                            size="icon-sm"
+                            variant="ghost"
+                            disabled={isPending}
+                            aria-label="데이터 값 수정"
+                            onClick={() => {
+                              setEditingId(option.id);
+                              setDraftLabel(option.label);
+                            }}
+                          >
+                            <Pencil className="size-4" />
                           </Button>
                         </>
                       ) : (

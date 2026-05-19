@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { canManageCustomers, getCurrentAppUser } from "@/lib/auth";
 import { createCustomer, listCustomerPage } from "@/lib/customers";
-import type { CustomerSortKey } from "@/lib/types";
+import type { CustomerDashboardFilter, CustomerSortKey } from "@/lib/types";
 
 const sortKeys = [
   "source",
@@ -16,6 +16,7 @@ const sortKeys = [
   "orderNote",
   "remark",
 ] as const satisfies readonly CustomerSortKey[];
+const dashboardFilters = ["open", "callbacks", "contacted"] as const satisfies readonly CustomerDashboardFilter[];
 
 const createSchema = z
   .object({
@@ -52,6 +53,7 @@ export async function GET(request: Request) {
       status: normalizeFacet(searchParams.get("status")),
       gender: normalizeFacet(searchParams.get("gender")),
       ageDecade: normalizeFacet(searchParams.get("ageDecade")),
+      dashboardFilter: parseDashboardFilter(searchParams.get("dashboardFilter")),
       sortKey: sortKeys.includes(sortKey as CustomerSortKey)
         ? (sortKey as CustomerSortKey)
         : null,
@@ -101,4 +103,10 @@ function parsePageSize(value: string | null) {
 function normalizeFacet(value: string | null) {
   if (!value || value === "__all__") return null;
   return value;
+}
+
+function parseDashboardFilter(value: string | null) {
+  return dashboardFilters.includes(value as CustomerDashboardFilter)
+    ? (value as CustomerDashboardFilter)
+    : null;
 }

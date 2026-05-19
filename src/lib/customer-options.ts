@@ -88,7 +88,7 @@ export async function createCustomerOption(input: {
     })
     .returning();
 
-  return serializeOption(created, 0);
+  return serializeOption(created, await getOptionUsageCount(input.type, label));
 }
 
 export async function updateCustomerOption(
@@ -139,7 +139,7 @@ export async function updateCustomerOption(
       .where(eq(targetColumn, existing.label));
   }
 
-  return serializeOption(updated, 0);
+  return serializeOption(updated, await getOptionUsageCount(existing.type, nextLabel));
 }
 
 export async function deleteCustomerOption(id: string) {
@@ -150,6 +150,32 @@ export async function deleteCustomerOption(id: string) {
   await getDb().delete(customerOptions).where(eq(customerOptions.id, id));
 
   return { deleted: id };
+}
+
+export async function renameCustomerOptionValue(input: {
+  type: CustomerOptionType;
+  fromLabel: string;
+  label: string;
+}) {
+  const fromLabel = normalizeLabel(input.fromLabel);
+  const nextLabel = normalizeLabel(input.label);
+
+  if (!hasDatabaseUrl()) {
+    return demoOption(input.type, nextLabel);
+  }
+
+  const option = await ensureCustomerOption(input.type, nextLabel);
+
+  if (fromLabel !== nextLabel) {
+    const targetColumn = input.type === "source" ? customers.source : customers.status;
+
+    await getDb()
+      .update(customers)
+      .set({ [input.type]: nextLabel, updatedAt: new Date() })
+      .where(eq(targetColumn, fromLabel));
+  }
+
+  return serializeOption(option, await getOptionUsageCount(input.type, nextLabel));
 }
 
 async function ensureDefaultCustomerOptions() {
@@ -167,6 +193,55 @@ async function ensureDefaultCustomerOptions() {
     .onConflictDoNothing({
       target: [customerOptions.type, customerOptions.label],
     });
+}
+
+async function ensureCustomerOption(type: CustomerOptionType, label: string) {
+  const db = getDb();
+  const existing = await db.query.customerOptions.findFirst({
+    where: and(eq(customerOptions.type, type), eq(customerOptions.label, label)),
+  });
+
+  if (existing) {
+    return existing;
+  }
+
+  const [lastOption] = await db
+    .select({ sortOrder: customerOptions.sortOrder })
+    .from(customerOptions)
+    .where(eq(customerOptions.type, type))
+    .orderBy(sql`${customerOptions.sortOrder} desc`)
+    .limit(1);
+
+  await db
+    .insert(customerOptions)
+    .values({
+      type,
+      label,
+      sortOrder: (lastOption?.sortOrder ?? -1) + 1,
+    })
+    .onConflictDoNothing({
+      target: [customerOptions.type, customerOptions.label],
+    });
+
+  const option = await db.query.customerOptions.findFirst({
+    where: and(eq(customerOptions.type, type), eq(customerOptions.label, label)),
+  });
+
+  if (!option) {
+    throw new Error("옵션을 저장하지 못했습니다.");
+  }
+
+  return option;
+}
+
+async function getOptionUsageCount(type: CustomerOptionType, label: string) {
+  const targetColumn = type === "source" ? customers.source : customers.status;
+  const [row] = await getDb()
+    .select({ usageCount: count() })
+    .from(customers)
+    .where(eq(targetColumn, label));
+
+  return row?.usageCount ?? 0;
 }
 
 function serializeOption(

@@ -80,11 +80,13 @@ import {
 import type {
   CustomerActivityRow,
   CustomerContactMethod,
+  CustomerDashboardFilter,
   CustomerFacets,
   CustomerOptionRow,
   CustomerPageInfo,
   CustomerRow,
 } from "@/lib/types";
+import { CUSTOMER_EMPTY_FACET } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
@@ -99,7 +101,7 @@ const PAGE_SIZE_OPTIONS = [
   { value: "all", label: "전체" },
 ] as const;
 const SELECT_EMPTY_LABEL = "-";
-const COLUMN_WIDTH_STORAGE_VERSION = 1;
+const COLUMN_WIDTH_STORAGE_VERSION = 3;
 const PAGE_SIZE_STORAGE_VERSION = 1;
 const RESIZABLE_COLUMN_IDS = [
   "rowNumber",
@@ -160,6 +162,16 @@ type SortState = {
   direction: SortDirection;
 };
 
+type CustomerGridInitialFilters = {
+  query: string;
+  source: string;
+  salesPotential: string;
+  status: string;
+  gender: string;
+  ageDecade: string;
+  dashboardFilter: CustomerDashboardFilter | null;
+};
+
 type CustomerImportResponse = {
   fileName: string;
   imported: number;
@@ -197,6 +209,16 @@ const editableFields = new Set<string>([
   "orderNote",
   "remark",
 ]);
+
+const DEFAULT_INITIAL_FILTERS: CustomerGridInitialFilters = {
+  query: "",
+  source: ALL,
+  salesPotential: ALL,
+  status: ALL,
+  gender: ALL,
+  ageDecade: ALL,
+  dashboardFilter: null,
+};
 
 type SalesPotentialQuickEditorProps = CustomCellEditorProps<CustomerRow, string | null> & {
   values?: string[];
@@ -274,6 +296,7 @@ export function CustomerGrid({
   facets: initialFacets,
   initialCustomerOptions,
   initialDetailCustomerId,
+  initialFilters = DEFAULT_INITIAL_FILTERS,
 }: {
   userId: string;
   initialRows: CustomerRow[];
@@ -281,6 +304,7 @@ export function CustomerGrid({
   facets: CustomerFacets;
   initialCustomerOptions: CustomerOptionRow[];
   initialDetailCustomerId?: string | null;
+  initialFilters?: CustomerGridInitialFilters;
 }) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -294,25 +318,28 @@ export function CustomerGrid({
   const [facets, setFacets] = useState(initialFacets);
   const [customerOptions, setCustomerOptions] = useState(initialCustomerOptions);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set());
-  const [query, setQuery] = useState("");
-  const [source, setSource] = useState(ALL);
-  const [salesPotential, setSalesPotential] = useState(ALL);
-  const [status, setStatus] = useState(ALL);
-  const [gender, setGender] = useState(ALL);
-  const [ageDecade, setAgeDecade] = useState(ALL);
+  const [query, setQuery] = useState(initialFilters.query);
+  const [source, setSource] = useState(initialFilters.source);
+  const [salesPotential, setSalesPotential] = useState(initialFilters.salesPotential);
+  const [status, setStatus] = useState(initialFilters.status);
+  const [gender, setGender] = useState(initialFilters.gender);
+  const [ageDecade, setAgeDecade] = useState(initialFilters.ageDecade);
+  const [dashboardFilter, setDashboardFilter] = useState<CustomerDashboardFilter | null>(
+    initialFilters.dashboardFilter,
+  );
   const [appliedFilters, setAppliedFilters] = useState({
-    query: "",
-    source: ALL,
-    salesPotential: ALL,
-    status: ALL,
-    gender: ALL,
-    ageDecade: ALL,
+    query: initialFilters.query,
+    source: initialFilters.source,
+    salesPotential: initialFilters.salesPotential,
+    status: initialFilters.status,
+    gender: initialFilters.gender,
+    ageDecade: initialFilters.ageDecade,
+    dashboardFilter: initialFilters.dashboardFilter,
   });
   const [importNotice, setImportNotice] = useState<ImportNotice | null>(null);
   const [isImporting, setIsImporting] = useState(false);
   const [isDownloadingTemplate, setIsDownloadingTemplate] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
-  const [isAdding, setIsAdding] = useState(false);
   const [, setSavingIds] = useState<Set<string>>(() => new Set());
   const [sortState, setSortState] = useState<SortState>({ key: null, direction: "asc" });
   const [pageSize, setPageSize] = useState<PageSize>(normalizeClientPageSize(initialPageInfo.pageSize));
@@ -323,6 +350,7 @@ export function CustomerGrid({
   const [detailCustomer, setDetailCustomer] = useState<CustomerRow | null>(null);
   const [detailDraft, setDetailDraft] = useState<DetailCustomerDraft | null>(null);
   const [isDetailDialogOpen, setIsDetailDialogOpen] = useState(false);
+  const [isCreatingDetailCustomer, setIsCreatingDetailCustomer] = useState(false);
   const [contactActivities, setContactActivities] = useState<DraftContactActivity[]>([]);
   const [isLoadingActivities, setIsLoadingActivities] = useState(false);
   const [isSavingDetail, setIsSavingDetail] = useState(false);
@@ -404,6 +432,10 @@ export function CustomerGrid({
       ageDecade: appliedFilters.ageDecade,
       sortDirection: sortState.direction,
     });
+
+    if (appliedFilters.dashboardFilter) {
+      params.set("dashboardFilter", appliedFilters.dashboardFilter);
+    }
 
     if (sortState.key) {
       params.set("sortKey", sortState.key);
@@ -490,12 +522,37 @@ export function CustomerGrid({
   }, []);
 
   const openDetailDialog = useCallback((customer: CustomerRow) => {
+    setIsCreatingDetailCustomer(false);
     setDetailCustomer(customer);
     setDetailDraft(createDetailCustomerDraft(customer));
     setIsDetailDialogOpen(true);
     setDetailNotice(null);
     loadContactActivities(customer.id);
   }, [loadContactActivities]);
+
+  const openCreateDetailDialog = useCallback(() => {
+    const draftCustomer = createNewCustomerPlaceholder({
+      assignedUserId: userId,
+      source: facets.sources[0] ?? "",
+      status: facets.statuses[0] ?? null,
+    });
+
+    setIsCreatingDetailCustomer(true);
+    setDetailCustomer(draftCustomer);
+    setDetailDraft(createDetailCustomerDraft(draftCustomer));
+    setContactActivities([]);
+    setIsLoadingActivities(false);
+    setDetailNotice(null);
+    setIsDetailDialogOpen(true);
+  }, [facets.sources, facets.statuses, userId]);
+
+  function setDetailDialogOpen(open: boolean) {
+    setIsDetailDialogOpen(open);
+
+    if (!open) {
+      setIsCreatingDetailCustomer(false);
+    }
+  }
 
   useEffect(() => {
     if (!initialDetailCustomerId || didOpenInitialDetailRef.current) return;
@@ -555,7 +612,7 @@ export function CustomerGrid({
       {
         colId: "rowNumber",
         headerName: "No",
-        width: 74,
+        width: 56,
         pinned: "left",
         sortable: false,
         editable: false,
@@ -593,7 +650,7 @@ export function CustomerGrid({
       {
         field: "salesPotential",
         headerName: SALES_TEMPERATURE_LABEL,
-        width: 148,
+        width: 118,
         editable: true,
         singleClickEdit: true,
         cellEditor: SalesPotentialQuickEditor,
@@ -605,7 +662,7 @@ export function CustomerGrid({
       {
         field: "source",
         headerName: "DB출처",
-        width: 170,
+        width: 120,
         editable: true,
         cellEditor: "agSelectCellEditor",
         cellEditorParams: { values: [EMPTY, ...selectValues.sourceOptions] },
@@ -614,14 +671,14 @@ export function CustomerGrid({
       {
         field: "phone",
         headerName: "전화번호",
-        width: 170,
+        width: 132,
         editable: true,
         cellClass: "font-mono",
       },
       {
         field: "gender",
         headerName: "성별",
-        width: 120,
+        width: 74,
         editable: true,
         cellEditor: "agSelectCellEditor",
         cellEditorParams: { values: [EMPTY, ...selectValues.genders] },
@@ -630,7 +687,7 @@ export function CustomerGrid({
       {
         field: "ageDecade",
         headerName: "나이대",
-        width: 120,
+        width: 77,
         editable: true,
         cellEditor: "agSelectCellEditor",
         cellEditorParams: { values: [EMPTY, ...selectValues.ageDecades] },
@@ -639,7 +696,7 @@ export function CustomerGrid({
       {
         field: "status",
         headerName: "상황",
-        width: 140,
+        width: 104,
         editable: true,
         cellEditor: "agSelectCellEditor",
         cellEditorParams: { values: [EMPTY, ...selectValues.statusOptions] },
@@ -773,6 +830,7 @@ export function CustomerGrid({
       status: ALL,
       gender: ALL,
       ageDecade: ALL,
+      dashboardFilter: null,
     };
 
     setQuery("");
@@ -781,6 +839,7 @@ export function CustomerGrid({
     setStatus(ALL);
     setGender(ALL);
     setAgeDecade(ALL);
+    setDashboardFilter(null);
     setAppliedFilters(emptyFilters);
     setCurrentPage(1);
   }
@@ -792,11 +851,17 @@ export function CustomerGrid({
 
     setIsSearching(true);
     searchTimer.current = setTimeout(() => {
-      setAppliedFilters({ query, source, salesPotential, status, gender, ageDecade });
+      setAppliedFilters({ query, source, salesPotential, status, gender, ageDecade, dashboardFilter });
       setIsSearching(false);
       setCurrentPage(1);
       searchTimer.current = null;
     }, 180);
+  }
+
+  function clearDashboardFilter() {
+    setDashboardFilter(null);
+    setAppliedFilters({ query, source, salesPotential, status, gender, ageDecade, dashboardFilter: null });
+    setCurrentPage(1);
   }
 
   function replaceRows(nextRows: CustomerRow[]) {
@@ -863,6 +928,7 @@ export function CustomerGrid({
     setDetailNotice(null);
     setIsSavingDetail(true);
 
+    const isCreating = isCreatingDetailCustomer;
     let savedCustomer = detailCustomer;
 
     try {
@@ -895,15 +961,15 @@ export function CustomerGrid({
         Object.assign(detailPayload, normalizeDetailLastContactedValue(detailDraft.lastContactedAt));
       }
 
-      const response = await fetch(`/api/customers/${detailCustomer.id}`, {
-        method: "PATCH",
+      const response = await fetch(isCreating ? "/api/customers" : `/api/customers/${detailCustomer.id}`, {
+        method: isCreating ? "POST" : "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(detailPayload),
       });
       const payload = await response.json();
 
       if (!response.ok) {
-        throw new Error(payload.error ?? "고객 정보 저장에 실패했습니다.");
+        throw new Error(payload.error ?? (isCreating ? "고객 추가에 실패했습니다." : "고객 정보 저장에 실패했습니다."));
       }
 
       const payloadCustomer = payload.customer as CustomerRow;
@@ -920,19 +986,46 @@ export function CustomerGrid({
 
       setDetailCustomer(savedCustomer);
       setDetailDraft(createDetailCustomerDraft(savedCustomer));
-      updateGridRow(savedCustomer);
+      setIsCreatingDetailCustomer(false);
+
+      if (isCreating) {
+        replaceRows([savedCustomer, ...rowsRef.current].slice(0, effectivePageSize));
+        setPageInfo((current) => ({
+          ...current,
+          returned: Math.min(effectivePageSize, current.returned + 1),
+          hasNextPage: current.hasNextPage || current.returned >= effectivePageSize,
+        }));
+        setSelectedIds(new Set([savedCustomer.id]));
+        window.requestAnimationFrame(() => {
+          const api = gridApiRef.current;
+          if (api && !api.isDestroyed()) {
+            api.getRowNode(savedCustomer.id)?.setSelected(true, true);
+          }
+        });
+      } else {
+        updateGridRow(savedCustomer);
+      }
       resetGridRowHeights();
     } catch (error) {
       setDetailNotice({
         type: "error",
-        message: error instanceof Error ? error.message : "고객 정보 저장에 실패했습니다.",
+        message: error instanceof Error
+          ? error.message
+          : isCreating
+            ? "고객 추가에 실패했습니다."
+            : "고객 정보 저장에 실패했습니다.",
       });
       setIsSavingDetail(false);
       return;
     }
 
     setIsSavingDetail(false);
-    await saveContactActivities(savedCustomer, "상세 정보를 저장했습니다.");
+    if (isCreating && contactActivities.length === 0) {
+      setDetailNotice({ type: "success", message: "고객을 추가했습니다." });
+      return;
+    }
+
+    await saveContactActivities(savedCustomer, isCreating ? "고객을 추가했습니다." : "상세 정보를 저장했습니다.");
   }
 
   async function saveContactActivities(
@@ -1071,50 +1164,6 @@ export function CustomerGrid({
       statusOptions: uniqueStrings([...nextStatusOptions, ...current.statuses]),
     }));
   }, []);
-
-  async function addCustomer() {
-    setIsAdding(true);
-    setImportNotice(null);
-
-    try {
-      const response = await fetch("/api/customers", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          source: facets.sources[0] ?? "",
-          phone: "",
-          status: facets.statuses[0] ?? null,
-        }),
-      });
-      const payload = await response.json();
-
-      if (!response.ok) {
-        throw new Error(payload.error ?? "고객 추가에 실패했습니다.");
-      }
-
-      const customer = payload.customer as CustomerRow;
-      replaceRows([customer, ...rowsRef.current].slice(0, effectivePageSize));
-      setPageInfo((current) => ({
-        ...current,
-        returned: Math.min(effectivePageSize, current.returned + 1),
-        hasNextPage: current.hasNextPage || current.returned >= effectivePageSize,
-      }));
-      setSelectedIds(new Set([customer.id]));
-      window.requestAnimationFrame(() => {
-        const api = gridApiRef.current;
-        if (api && !api.isDestroyed()) {
-          api.getRowNode(customer.id)?.setSelected(true, true);
-        }
-      });
-    } catch (error) {
-      setImportNotice({
-        type: "error",
-        message: error instanceof Error ? error.message : "고객 추가에 실패했습니다.",
-      });
-    } finally {
-      setIsAdding(false);
-    }
-  }
 
   function deleteSelectedCustomers() {
     const ids = Array.from(selectedIds);
@@ -1303,6 +1352,17 @@ export function CustomerGrid({
               <RotateCcw className="size-4" />
               초기화
             </Button>
+            {dashboardFilter ? (
+              <button
+                type="button"
+                className="inline-flex h-8 items-center gap-1.5 rounded border border-[#bfd2f5] bg-[#eef4ff] px-2.5 text-xs font-semibold text-[#1f4f9f] transition-colors hover:bg-[#e1ecff]"
+                onClick={clearDashboardFilter}
+                aria-label={`${getDashboardFilterLabel(dashboardFilter)} 조건 해제`}
+              >
+                대시보드: {getDashboardFilterLabel(dashboardFilter)}
+                <X className="size-3.5" />
+              </button>
+            ) : null}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <input
@@ -1409,8 +1469,8 @@ export function CustomerGrid({
                 <ChevronRight className="size-4" />
               </Button>
             </div>
-            <Button size="sm" onClick={addCustomer} disabled={isAdding}>
-              {isAdding ? <Loader2 className="size-4 animate-spin" /> : <FilePlus2 className="size-4" />}
+            <Button size="sm" onClick={openCreateDetailDialog}>
+              <FilePlus2 className="size-4" />
               추가
             </Button>
             <Button
@@ -1478,7 +1538,7 @@ export function CustomerGrid({
           </div>
         </DialogContent>
       </Dialog>
-      <Dialog open={isDetailDialogOpen} onOpenChange={setIsDetailDialogOpen}>
+      <Dialog open={isDetailDialogOpen} onOpenChange={setDetailDialogOpen}>
         <DialogContent className="crm-customer-surface max-h-[90vh] w-[calc(100vw-1rem)] overflow-visible p-0 sm:max-w-[96vw] 2xl:max-w-[1500px]">
           <div className="max-h-[90vh] overflow-y-auto">
             <DialogHeader className="border-b border-[#d8e0ea] bg-[#f8fafc] px-5 py-3 pr-14">
@@ -1486,7 +1546,7 @@ export function CustomerGrid({
                 <span className="flex size-8 shrink-0 items-center justify-center rounded-md border border-[#d8e0ea] bg-white text-[#2f70dc]">
                   <Phone className="size-4" />
                 </span>
-                <span className="truncate">고객 상세</span>
+                <span className="truncate">{isCreatingDetailCustomer ? "고객 추가" : "고객 상세"}</span>
               </DialogTitle>
             </DialogHeader>
 
@@ -1703,7 +1763,7 @@ export function CustomerGrid({
                 disabled={!detailCustomer || isSavingDetailDialog || isLoadingActivities}
               >
                 {isSavingDetailDialog ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
-                저장
+                {isCreatingDetailCustomer ? "추가" : "저장"}
               </Button>
             </DialogFooter>
           </div>
@@ -2097,6 +2157,38 @@ function createDetailCustomerDraft(customer: CustomerRow): DetailCustomerDraft {
   };
 }
 
+function createNewCustomerPlaceholder({
+  assignedUserId,
+  source,
+  status,
+}: {
+  assignedUserId: string;
+  source: string;
+  status: string | null;
+}): CustomerRow {
+  const now = new Date().toISOString();
+
+  return {
+    id: `new-customer-${createClientId()}`,
+    source,
+    salesPotential: null,
+    phone: "",
+    gender: null,
+    ageDecade: null,
+    status,
+    callNote: null,
+    lastContactedAt: null,
+    lastContactedLabel: null,
+    orderNote: null,
+    remark: null,
+    tags: [],
+    assignedUserId,
+    assignedUserName: null,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 function normalizeEditedValue(field: EditableField, value: unknown) {
   const text = value === EMPTY || value === null || value === undefined ? "" : String(value);
   const trimmed = field === "callNote" || field === "orderNote" ? text : text.trim();
@@ -2251,6 +2343,17 @@ function createClientId() {
   return `contact-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+function getDashboardFilterLabel(value: CustomerDashboardFilter) {
+  switch (value) {
+    case "open":
+      return "상담 가능";
+    case "callbacks":
+      return "재연락 대상";
+    case "contacted":
+      return "연락 완료";
+  }
+}
+
 function LoadingOverlay() {
   return (
     <div className="absolute inset-0 z-20 flex items-center justify-center bg-white/70 backdrop-blur-[1px]">
@@ -2280,6 +2383,9 @@ function FacetSelect({
       </SelectTrigger>
       <SelectContent>
         <SelectItem value={ALL}>{label} 전체</SelectItem>
+        {value === CUSTOMER_EMPTY_FACET ? (
+          <SelectItem value={CUSTOMER_EMPTY_FACET}>미분류</SelectItem>
+        ) : null}
         {values.map((item) => (
           <SelectItem key={item} value={item}>
             {item}
@@ -2323,6 +2429,21 @@ function SalesPotentialFilter({
       >
         전체
       </button>
+      {value === CUSTOMER_EMPTY_FACET ? (
+        <button
+          type="button"
+          aria-pressed
+          className="h-7 rounded border px-2.5 text-xs font-semibold"
+          style={{
+            backgroundColor: "#eef4ff",
+            borderColor: "#bfd2f5",
+            color: "#1f4f9f",
+          }}
+          onClick={() => onValueChange(CUSTOMER_EMPTY_FACET)}
+        >
+          미분류
+        </button>
+      ) : null}
       {options.map((item) => {
         const meta = getSalesPotentialMeta(item);
         const selected = normalizeSalesPotential(value) === meta.value;
