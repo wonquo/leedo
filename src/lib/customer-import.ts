@@ -1,7 +1,7 @@
 import type { CellValue, Worksheet } from "exceljs";
 
 export type ImportedCustomer = {
-  source: string;
+  source: string | null;
   phone: string;
   gender: string | null;
   ageDecade: string | null;
@@ -100,7 +100,7 @@ export function parseCustomerSheet(sheet: Worksheet, year = new Date().getFullYe
     const parsedDate = parseContactDate(lastContacted, year);
 
     imported.push({
-      source: cleanText(source) || "미분류",
+      source: cleanText(source),
       phone: normalizedPhone,
       gender: parsedGenderAge.gender,
       ageDecade: parsedGenderAge.ageDecade,

@@ -163,6 +163,9 @@ type SortState = {
 type CustomerImportResponse = {
   fileName: string;
   imported: number;
+  inserted?: number;
+  updated?: number;
+  mergedDuplicates?: number;
   parsedRows: number;
   sourceRows: number;
   rows: CustomerRow[];
@@ -307,6 +310,7 @@ export function CustomerGrid({
   });
   const [importNotice, setImportNotice] = useState<ImportNotice | null>(null);
   const [isImporting, setIsImporting] = useState(false);
+  const [isDownloadingTemplate, setIsDownloadingTemplate] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [isAdding, setIsAdding] = useState(false);
   const [, setSavingIds] = useState<Set<string>>(() => new Set());
@@ -1186,6 +1190,36 @@ export function CustomerGrid({
     URL.revokeObjectURL(url);
   }
 
+  async function downloadExcelTemplate() {
+    setIsDownloadingTemplate(true);
+    setImportNotice(null);
+
+    try {
+      const response = await fetch("/api/customers/import");
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null);
+        throw new Error(payload?.error ?? "엑셀 템플릿 다운로드에 실패했습니다.");
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+
+      link.href = url;
+      link.download = "customer-import-template.xlsx";
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setImportNotice({
+        type: "error",
+        message: error instanceof Error ? error.message : "엑셀 템플릿 다운로드에 실패했습니다.",
+      });
+    } finally {
+      setIsDownloadingTemplate(false);
+    }
+  }
+
   async function importExcel(event: ChangeEvent<HTMLInputElement>) {
     const input = event.target;
     const file = input.files?.[0];
@@ -1212,9 +1246,14 @@ export function CustomerGrid({
       setPageInfo(result.pageInfo);
       setFacets(result.facets);
       resetFilters();
+      const importDetails = [
+        `신규 ${(result.inserted ?? result.imported).toLocaleString()}건`,
+        result.updated !== undefined ? `업데이트 ${result.updated.toLocaleString()}건` : null,
+        result.mergedDuplicates ? `파일 내 중복 ${result.mergedDuplicates.toLocaleString()}건 병합` : null,
+      ].filter(Boolean);
       setImportNotice({
         type: "success",
-        message: `${result.fileName}에서 ${result.imported.toLocaleString()}건을 업로드했습니다.`,
+        message: `${result.fileName}에서 ${result.imported.toLocaleString()}건을 업로드했습니다. (${importDetails.join(", ")})`,
       });
     } catch (error) {
       setImportNotice({
@@ -1273,6 +1312,15 @@ export function CustomerGrid({
               className="hidden"
               onChange={importExcel}
             />
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={isDownloadingTemplate}
+              onClick={downloadExcelTemplate}
+            >
+              {isDownloadingTemplate ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+              엑셀 템플릿
+            </Button>
             <Button
               variant="outline"
               size="sm"

@@ -633,6 +633,27 @@ export async function importCustomers(input: {
   }
 
   const db = getDb();
+  const mergedRows = mergeImportedCustomerRows(input.rows);
+  const phones = mergedRows.map((row) => row.phone);
+  const existingByPhone = new Map<string, typeof customers.$inferSelect>();
+
+  for (let index = 0; index < phones.length; index += 500) {
+    const phoneChunk = phones.slice(index, index + 500);
+    if (!phoneChunk.length) continue;
+
+    const existingRows = await db
+      .select()
+      .from(customers)
+      .where(inArray(customers.phone, phoneChunk))
+      .orderBy(desc(customers.updatedAt), desc(customers.id));
+
+    for (const customer of existingRows) {
+      if (!existingByPhone.has(customer.phone)) {
+        existingByPhone.set(customer.phone, customer);
+      }
+    }
+  }
+
   const [batch] = await db
     .insert(importBatches)
     .values({
@@ -644,15 +665,38 @@ export async function importCustomers(input: {
     .returning();
 
   const chunkSize = 500;
-  let imported = 0;
+  const customerIdByPhone = new Map<string, string>();
+  const rowsToInsert: ImportedCustomer[] = [];
+  let inserted = 0;
+  let updated = 0;
 
-  for (let index = 0; index < input.rows.length; index += chunkSize) {
-    const chunk = input.rows.slice(index, index + chunkSize);
+  for (const row of mergedRows) {
+    const existing = existingByPhone.get(row.phone);
+
+    if (!existing) {
+      rowsToInsert.push(row);
+      continue;
+    }
+
+    const [updatedCustomer] = await db
+      .update(customers)
+      .set(mergeImportedCustomer(existing, row, input.importedBy))
+      .where(eq(customers.id, existing.id))
+      .returning({ id: customers.id });
+
+    if (updatedCustomer) {
+      customerIdByPhone.set(row.phone, updatedCustomer.id);
+      updated += 1;
+    }
+  }
+
+  for (let index = 0; index < rowsToInsert.length; index += chunkSize) {
+    const chunk = rowsToInsert.slice(index, index + chunkSize);
     const insertedCustomers = await db
       .insert(customers)
       .values(
         chunk.map((row) => ({
-          source: row.source,
+          source: row.source ?? "미분류",
           salesPotential: null,
           phone: row.phone,
           gender: row.gender,
@@ -666,24 +710,134 @@ export async function importCustomers(input: {
           assignedUserId: input.importedBy,
         })),
       )
-      .returning({ id: customers.id });
+      .returning({ id: customers.id, phone: customers.phone });
 
+    for (const customer of insertedCustomers) {
+      customerIdByPhone.set(customer.phone, customer.id);
+    }
+
+    inserted += insertedCustomers.length;
+  }
+
+  for (let index = 0; index < input.rows.length; index += chunkSize) {
+    const chunk = input.rows.slice(index, index + chunkSize);
     await db.insert(customerImportRows).values(
-      chunk.map((row, rowIndex) => ({
+      chunk.map((row) => ({
         batchId: batch.id,
-        customerId: insertedCustomers[rowIndex]?.id ?? null,
+        customerId: customerIdByPhone.get(row.phone) ?? null,
         sourceRowNumber: row.sourceRowNumber,
         rawData: row.rawData,
       })),
     );
-
-    imported += insertedCustomers.length;
   }
 
   return {
     batchId: batch.id,
-    imported,
+    imported: inserted + updated,
+    inserted,
+    updated,
+    mergedDuplicates: input.rows.length - mergedRows.length,
   };
+}
+
+function mergeImportedCustomerRows(rows: ImportedCustomer[]) {
+  const rowsByPhone = new Map<string, ImportedCustomer>();
+  const phones: string[] = [];
+
+  for (const row of rows) {
+    const existing = rowsByPhone.get(row.phone);
+
+    if (!existing) {
+      rowsByPhone.set(row.phone, row);
+      phones.push(row.phone);
+      continue;
+    }
+
+    rowsByPhone.set(row.phone, mergeImportedRow(existing, row));
+  }
+
+  return phones
+    .map((phone) => rowsByPhone.get(phone))
+    .filter((row): row is ImportedCustomer => Boolean(row));
+}
+
+function mergeImportedRow(existing: ImportedCustomer, incoming: ImportedCustomer): ImportedCustomer {
+  const hasLastContacted = hasImportedLastContacted(incoming);
+
+  return {
+    ...existing,
+    source: preferImportedText(existing.source, incoming.source),
+    gender: preferImportedText(existing.gender, incoming.gender),
+    ageDecade: preferImportedText(existing.ageDecade, incoming.ageDecade),
+    status: preferImportedText(existing.status, incoming.status),
+    callNote: appendDistinctText(existing.callNote, incoming.callNote),
+    lastContactedAt: hasLastContacted ? incoming.lastContactedAt : existing.lastContactedAt,
+    lastContactedLabel: hasLastContacted ? incoming.lastContactedLabel : existing.lastContactedLabel,
+    orderNote: appendDistinctText(existing.orderNote, incoming.orderNote),
+    remark: appendDistinctText(existing.remark, incoming.remark),
+    sourceRowNumber: incoming.sourceRowNumber,
+    rawData: incoming.rawData,
+  };
+}
+
+function mergeImportedCustomer(
+  existing: typeof customers.$inferSelect,
+  incoming: ImportedCustomer,
+  importedBy: string,
+): Partial<typeof customers.$inferInsert> {
+  const hasLastContacted = hasImportedLastContacted(incoming);
+
+  return {
+    source: preferImportedText(existing.source, incoming.source) ?? "",
+    gender: preferImportedText(existing.gender, incoming.gender),
+    ageDecade: preferImportedText(existing.ageDecade, incoming.ageDecade),
+    status: preferImportedText(existing.status, incoming.status),
+    callNote: appendDistinctText(existing.callNote, incoming.callNote),
+    lastContactedAt: hasLastContacted ? incoming.lastContactedAt : existing.lastContactedAt,
+    lastContactedLabel: hasLastContacted ? incoming.lastContactedLabel : existing.lastContactedLabel,
+    orderNote: appendDistinctText(existing.orderNote, incoming.orderNote),
+    remark: appendDistinctText(existing.remark, incoming.remark),
+    assignedUserId: existing.assignedUserId ?? importedBy,
+    updatedAt: new Date(),
+  };
+}
+
+function preferImportedText(existing: string | null, incoming: string | null) {
+  return hasText(incoming) ? incoming : existing;
+}
+
+function appendDistinctText(existing: string | null, incoming: string | null) {
+  if (!hasText(incoming)) {
+    return existing;
+  }
+
+  if (!hasText(existing)) {
+    return incoming;
+  }
+
+  const normalizedIncoming = normalizeComparableText(incoming);
+  const existingParts = existing.split(/\r?\n/).map(normalizeComparableText);
+
+  if (
+    normalizeComparableText(existing) === normalizedIncoming ||
+    existingParts.includes(normalizedIncoming)
+  ) {
+    return existing;
+  }
+
+  return `${existing}\n${incoming}`;
+}
+
+function hasImportedLastContacted(row: ImportedCustomer) {
+  return row.lastContactedAt !== null || hasText(row.lastContactedLabel);
+}
+
+function hasText(value: string | null | undefined): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function normalizeComparableText(value: string) {
+  return value.replace(/\s+/g, " ").trim();
 }
 
 export async function countRealCustomers() {

@@ -53,7 +53,7 @@ async function main() {
     const insertedCustomers = await db
       .insert(customers)
       .values(chunk.map((row) => ({
-        source: row.source,
+        source: row.source ?? "미분류",
         phone: row.phone,
         gender: row.gender,
         ageDecade: row.ageDecade,
